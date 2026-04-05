@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  serverExternalPackages: ["googleapis"],
-};
+  serverExternalPackages: ['algum-pacote'],
+}
 
-export default nextConfig;
+export default nextConfig
