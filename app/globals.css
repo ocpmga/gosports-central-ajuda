@@ -58,7 +58,7 @@ body {
 
 /* ── Pattern background ───────────────────── */
 .bg-pattern {
-  background-image: 
+  background-image:
     radial-gradient(circle at 1px 1px, rgba(0, 166, 81, 0.08) 1px, transparent 0);
   background-size: 32px 32px;
 }

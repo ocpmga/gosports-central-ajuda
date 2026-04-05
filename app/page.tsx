@@ -20,7 +20,6 @@ export default function HomePage() {
       if (!question.trim() || isLoading) return;
       setError(null);
 
-      // Add user message
       const userMsg: ChatMessage = {
         id: `${baseId}-u-${Date.now()}`,
         role: "user",
@@ -31,7 +30,6 @@ export default function HomePage() {
       setIsLoading(true);
 
       try {
-        // Build history for context (last 8 messages)
         const history = messages.slice(-8).map((m) => ({
           role: m.role,
           content: m.content,
@@ -67,7 +65,6 @@ export default function HomePage() {
             : "Erro ao conectar com o servidor. Tente novamente.";
         setError(msg);
 
-        // Also show error as assistant message
         const errMsg: ChatMessage = {
           id: `${baseId}-e-${Date.now()}`,
           role: "assistant",

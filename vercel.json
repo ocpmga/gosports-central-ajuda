@@ -4,7 +4,7 @@
   "devCommand": "next dev",
   "installCommand": "npm install",
   "functions": {
-    "src/app/api/chat/route.ts": {
+    "app/api/chat/route.ts": {
       "maxDuration": 60
     }
   },

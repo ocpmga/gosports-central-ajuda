@@ -24,10 +24,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const trimmedQuestion = question.trim().slice(0, 1000); // safety cap
+    const trimmedQuestion = question.trim().slice(0, 1000);
 
     // ── Fetch documents from Google Drive ──────
-    let documents = [];
+    let documents: Awaited<ReturnType<typeof fetchDriveDocuments>> = [];
     let usedDrive = true;
 
     try {
@@ -35,7 +35,6 @@ export async function POST(req: NextRequest) {
       documents = findRelevantDocuments(allDocs, trimmedQuestion);
     } catch (driveError) {
       console.error("Drive error:", driveError);
-      // Gracefully degrade — answer without context
       usedDrive = false;
       documents = [];
     }
