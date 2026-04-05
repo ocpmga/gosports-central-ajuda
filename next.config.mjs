@@ -1,6 +1,4 @@
 /** @type {import('next').NextConfig} */
-const nextConfig = {
-  serverExternalPackages: ['algum-pacote'],
-}
+const nextConfig = {}
 
 export default nextConfig
