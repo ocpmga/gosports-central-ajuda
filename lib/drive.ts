@@ -46,7 +46,11 @@ async function listFilesInFolder(
     pageSize: 50,
   });
 
-  return res.data.files || [];
+  return (res.data.files || []).map((file) => ({
+  id: file.id || "",
+  name: file.name || "",
+  mimeType: file.mimeType || "",
+}));
 }
 
 // ── Extract text from a Google Doc ───────────
