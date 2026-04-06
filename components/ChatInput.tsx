@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, useRef, useEffect, KeyboardEvent } from "react";
+import { useState, useRef, useEffect, useCallback, KeyboardEvent } from "react";
 import { Send, Mic, MicOff, Loader2 } from "lucide-react";
 
-// ── Web Speech API types ──────────────────────
 interface SpeechRecognitionEvent extends Event {
   results: SpeechRecognitionResultList;
 }
@@ -23,17 +22,16 @@ interface SpeechRecognitionAlternative {
 interface Props {
   onSend: (question: string) => void;
   isLoading: boolean;
-  disabled?: boolean;
 }
 
-export default function ChatInput({ onSend, isLoading, disabled }: Props) {
+export default function ChatInput({ onSend, isLoading }: Props) {
   const [value, setValue] = useState("");
   const [isListening, setIsListening] = useState(false);
   const [hasSpeech, setHasSpeech] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const recognitionRef = useRef<EventTarget | null>(null);
 
-  // Auto-resize textarea
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const recognitionRef = useRef<{ stop: () => void } | null>(null);
+
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -41,95 +39,97 @@ export default function ChatInput({ onSend, isLoading, disabled }: Props) {
     el.style.height = Math.min(el.scrollHeight, 120) + "px";
   }, [value]);
 
-  // Check for speech support
   useEffect(() => {
-    const hasSpeechAPI =
-      typeof window !== "undefined" &&
-      ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
-    setHasSpeech(hasSpeechAPI);
+    if (typeof window === "undefined") return;
+    const supported =
+      "SpeechRecognition" in window || "webkitSpeechRecognition" in window;
+    setHasSpeech(supported);
   }, []);
 
-  const handleSend = () => {
+  const submitMessage = useCallback(() => {
     const trimmed = value.trim();
-    if (!trimmed || isLoading || disabled) return;
+    if (!trimmed || isLoading) return;
     onSend(trimmed);
     setValue("");
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
-  };
+  }, [value, isLoading, onSend]);
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        submitMessage();
+      }
+    },
+    [submitMessage]
+  );
 
-  const toggleMic = () => {
+  const toggleMic = useCallback(() => {
     if (!hasSpeech) return;
 
-    const SpeechRecognition =
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (window as any).SpeechRecognition ||
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (window as any).webkitSpeechRecognition;
-
     if (isListening && recognitionRef.current) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (recognitionRef.current as any).stop();
+      recognitionRef.current.stop();
       setIsListening(false);
       return;
     }
 
-    const recognition = new SpeechRecognition();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) return;
+
+    const recognition = new SR();
     recognition.lang = "pt-BR";
     recognition.continuous = false;
     recognition.interimResults = true;
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
-      const transcript = Array.from(
-        { length: event.results.length },
-        (_, i) => event.results[i][0].transcript
-      ).join("");
+      let transcript = "";
+      for (let i = 0; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
       setValue(transcript);
     };
 
-    recognition.onend = () => setIsListening(false);
-    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => {
+      setIsListening(false);
+      recognitionRef.current = null;
+    };
+
+    recognition.onerror = () => {
+      setIsListening(false);
+      recognitionRef.current = null;
+    };
 
     recognitionRef.current = recognition;
     recognition.start();
     setIsListening(true);
-  };
+  }, [hasSpeech, isListening]);
 
-  const canSend = value.trim().length > 0 && !isLoading && !disabled;
+  const canSend = value.trim().length > 0 && !isLoading;
 
   return (
     <div className="relative">
-      {/* Input container */}
       <div
-        className={`
-          flex items-end gap-2
-          bg-white border-2 rounded-2xl
-          shadow-gosports-sm
-          transition-all duration-200
-          ${
-            isLoading || disabled
-              ? "border-gosports-border opacity-70"
-              : "border-gosports-border focus-within:border-gosports-primary focus-within:shadow-gosports-md"
-          }
-        `}
+        className={[
+          "flex items-end gap-2",
+          "bg-white border-2 rounded-2xl",
+          "shadow-gosports-sm transition-all duration-200",
+          isLoading
+            ? "border-gosports-border opacity-70"
+            : "border-gosports-border focus-within:border-gosports-primary focus-within:shadow-gosports-md",
+        ].join(" ")}
       >
-        {/* Textarea */}
         <textarea
           ref={textareaRef}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          disabled={isLoading || disabled}
+          disabled={isLoading}
           placeholder="Digite sua pergunta sobre o GoSports..."
           rows={1}
+          aria-label="Campo de pergunta"
           className="
             flex-1 resize-none bg-transparent
             px-4 py-3.5 text-sm text-gosports-dark
@@ -140,55 +140,50 @@ export default function ChatInput({ onSend, isLoading, disabled }: Props) {
           style={{ scrollbarWidth: "none" }}
         />
 
-        {/* Mic button */}
         {hasSpeech && (
           <button
             type="button"
             onClick={toggleMic}
-            disabled={isLoading || disabled}
+            disabled={isLoading}
             title={isListening ? "Parar gravação" : "Falar pergunta"}
-            className={`
-              flex-shrink-0 mb-2.5 mr-1
-              w-9 h-9 rounded-xl flex items-center justify-center
-              transition-all duration-200 btn-press
-              ${
-                isListening
-                  ? "bg-red-500 text-white mic-active"
-                  : "bg-gosports-light text-gosports-primary hover:bg-gosports-primary hover:text-white"
-              }
-              disabled:opacity-40 disabled:cursor-not-allowed
-            `}
+            aria-label={isListening ? "Parar gravação" : "Falar pergunta"}
+            className={[
+              "flex-shrink-0 mb-2.5 mr-1",
+              "w-9 h-9 rounded-xl flex items-center justify-center",
+              "transition-all duration-200 active:scale-95",
+              isListening
+                ? "bg-red-500 text-white mic-active"
+                : "bg-gosports-light text-gosports-primary hover:bg-gosports-primary hover:text-white",
+              "disabled:opacity-40 disabled:cursor-not-allowed",
+            ].join(" ")}
           >
             {isListening ? <MicOff size={15} /> : <Mic size={15} />}
           </button>
         )}
 
-        {/* Send button */}
         <button
           type="button"
-          onClick={handleSend}
+          onClick={submitMessage}
           disabled={!canSend}
           title="Enviar pergunta"
-          className={`
-            flex-shrink-0 mb-2.5 mr-2.5
-            w-9 h-9 rounded-xl flex items-center justify-center
-            transition-all duration-200 btn-press
-            ${
-              canSend
-                ? "bg-gosports-primary text-white shadow-gosports-sm hover:bg-gosports-secondary hover:shadow-gosports-md"
-                : "bg-gosports-border text-gosports-gray cursor-not-allowed"
-            }
-          `}
+          aria-label="Enviar pergunta"
+          className={[
+            "flex-shrink-0 mb-2.5 mr-2.5",
+            "w-9 h-9 rounded-xl flex items-center justify-center",
+            "transition-all duration-200 active:scale-95",
+            canSend
+              ? "bg-gosports-primary text-white shadow-gosports-sm hover:bg-gosports-secondary hover:shadow-gosports-md cursor-pointer"
+              : "bg-gosports-border text-gosports-gray cursor-not-allowed opacity-50",
+          ].join(" ")}
         >
           {isLoading ? (
             <Loader2 size={15} className="animate-spin" />
           ) : (
-            <Send size={15} className={canSend ? "" : "opacity-50"} />
+            <Send size={15} />
           )}
         </button>
       </div>
 
-      {/* Helper text */}
       <div className="flex items-center justify-between mt-2 px-1">
         <span className="text-xs text-gosports-gray/60">
           {isListening
