@@ -15,32 +15,43 @@ interface Props {
   disabled?: boolean;
 }
 
-export default function SuggestedQuestions({ onSelect, disabled }: Props) {
+export default function SuggestedQuestions({ onSelect, disabled = false }: Props) {
+  function handleClick(text: string) {
+    if (disabled) return;
+    onSelect(text);
+  }
+
   return (
     <div className="w-full">
       <p className="text-xs font-semibold text-gosports-gray uppercase tracking-widest mb-3 text-center">
         Perguntas frequentes
       </p>
+
       <div className="flex flex-wrap gap-2 justify-center">
-        {SUGGESTED.map((q, i) => (
+        {SUGGESTED.map((q) => (
           <button
             key={q.id}
-            onClick={() => !disabled && onSelect(q.text)}
+            type="button"
+            onClick={() => handleClick(q.text)}
             disabled={disabled}
+            aria-label={q.text}
             className="
-              group flex items-center gap-2 px-4 py-2.5
+              flex items-center gap-2
+              px-4 py-2.5
               bg-white border border-gosports-border
               rounded-full text-sm font-medium text-gosports-dark
               shadow-sm
               hover:border-gosports-primary hover:bg-gosports-light hover:text-gosports-secondary
               hover:shadow-gosports-sm
-              disabled:opacity-40 disabled:cursor-not-allowed
-              transition-all duration-200 ease-out
-              btn-press
+              active:scale-95
+              disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gosports-border disabled:hover:text-gosports-dark
+              transition-all duration-150 ease-out
+              cursor-pointer
             "
-            style={{ animationDelay: `${i * 60}ms` }}
           >
-            <span className="text-base leading-none">{q.icon}</span>
+            <span className="text-base leading-none" aria-hidden="true">
+              {q.icon}
+            </span>
             <span>{q.text}</span>
           </button>
         ))}
