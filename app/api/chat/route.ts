@@ -1,65 +1,166 @@
 // ============================================
 // GoSports — Chat API Route
-// POST /api/chat
 // ============================================
 
 import { NextRequest, NextResponse } from "next/server";
-import { fetchDriveDocuments, findRelevantDocuments } from "@/lib/drive";
 import { askClaude } from "@/lib/claude";
-import { ChatRequest, ChatResponse } from "@/types";
+import { getDriveDocuments } from "@/lib/drive";
+import { ChatResponse, DriveDocument } from "@/types";
 
-// Vercel timeout — Hobby: 60s, Pro: 300s
+export const runtime = "nodejs";
 export const maxDuration = 60;
+
+// ── Helpers ───────────────────────────────────
+
+function normalizeText(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+function tokenize(text: string): string[] {
+  return normalizeText(text)
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length > 1);
+}
+
+function scoreDocument(question: string, doc: DriveDocument): number {
+  const questionTokens = tokenize(question);
+  const content = normalizeText(`${doc.name} ${doc.content}`);
+
+  let score = 0;
+
+  for (const token of questionTokens) {
+    if (content.includes(token)) {
+      score += 1;
+    }
+  }
+
+  // Dá peso extra se o nome do documento tiver termo da pergunta
+  const docName = normalizeText(doc.name);
+  for (const token of questionTokens) {
+    if (docName.includes(token)) {
+      score += 2;
+    }
+  }
+
+  return score;
+}
+
+function selectRelevantDocuments(
+  question: string,
+  documents: DriveDocument[],
+  limit = 5
+): DriveDocument[] {
+  const scored = documents
+    .map((doc) => ({
+      doc,
+      score: scoreDocument(question, doc),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return scored.slice(0, limit).map((item) => item.doc);
+}
+
+function buildSources(documents: DriveDocument[]) {
+  return documents.map((doc) => ({
+    name: doc.name,
+  }));
+}
+
+// ── POST /api/chat ────────────────────────────
 
 export async function POST(req: NextRequest) {
   try {
-    // ── Parse request ──────────────────────────
-    const body: ChatRequest = await req.json();
-    const { question, history = [] } = body;
+    const body = await req.json().catch(() => null);
 
-    if (!question || typeof question !== "string" || question.trim() === "") {
+    if (!body || typeof body.question !== "string") {
       return NextResponse.json(
-        { error: "Pergunta inválida. Por favor, envie uma pergunta válida." },
+        { error: "Pergunta inválida." },
         { status: 400 }
       );
     }
 
-    const trimmedQuestion = question.trim().slice(0, 1000);
+    const question = body.question.trim();
+    const history =
+      Array.isArray(body.history) && body.history.length > 0
+        ? body.history.filter(
+            (msg: unknown) =>
+              typeof msg === "object" &&
+              msg !== null &&
+              "role" in msg &&
+              "content" in msg
+          )
+        : [];
 
-    // ── Fetch documents from Google Drive ──────
-    let documents: Awaited<ReturnType<typeof fetchDriveDocuments>> = [];
-    let usedDrive = true;
-
-    try {
-      const allDocs = await fetchDriveDocuments();
-      documents = findRelevantDocuments(allDocs, trimmedQuestion);
-    } catch (driveError) {
-      console.error("Drive error:", driveError);
-      usedDrive = false;
-      documents = [];
+    if (!question) {
+      return NextResponse.json(
+        { error: "Digite uma pergunta antes de enviar." },
+        { status: 400 }
+      );
     }
 
-    // ── Ask Claude ─────────────────────────────
-    const answer = await askClaude(trimmedQuestion, documents, history);
+    // 1. Buscar documentos do Google Drive
+    const allDocuments = await getDriveDocuments();
 
+    if (!allDocuments || allDocuments.length === 0) {
+      const emptyResponse: ChatResponse = {
+        answer:
+          "Não encontrei materiais de suporte disponíveis no momento. Para mais ajuda, entre em contato com o suporte GoSports.",
+        sources: [],
+      };
+
+      return NextResponse.json(emptyResponse);
+    }
+
+    // 2. Selecionar documentos mais relevantes
+    const relevantDocuments = selectRelevantDocuments(question, allDocuments, 5);
+
+    // Se nada relevante for encontrado, ainda manda lista vazia pro Claude,
+    // para ele usar o fallback correto
+    const documentsForClaude =
+      relevantDocuments.length > 0 ? relevantDocuments : [];
+
+    // 3. Perguntar ao Claude
+    const answer = await askClaude(question, documentsForClaude, history);
+
+    // 4. Responder ao frontend
     const response: ChatResponse = {
       answer,
-      sources: documents.map((d) => ({ id: d.id, name: d.name })),
-      found: documents.length > 0 && usedDrive,
+      sources: buildSources(documentsForClaude),
     };
 
     return NextResponse.json(response);
   } catch (error) {
     console.error("Chat API error:", error);
 
-    const message =
-      error instanceof Error ? error.message : "Erro desconhecido";
+    let message =
+      "Ocorreu um erro ao processar sua pergunta. Tente novamente em alguns instantes.";
 
-    return NextResponse.json(
-      {
-        error: `Ocorreu um erro ao processar sua pergunta: ${message}`,
-      },
-      { status: 500 }
-    );
+    if (error instanceof Error) {
+      // Erros específicos de Drive
+      if (
+        error.message.includes("GOOGLE_SERVICE_ACCOUNT") ||
+        error.message.toLowerCase().includes("drive error")
+      ) {
+        message =
+          "Houve um problema ao acessar os materiais de suporte do Google Drive.";
+      }
+
+      // Erros específicos de Anthropic
+      if (
+        error.message.toLowerCase().includes("anthropic") ||
+        error.message.toLowerCase().includes("claude")
+      ) {
+        message =
+          "Houve um problema ao gerar a resposta com a IA do GoSports.";
+      }
+    }
+
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
