@@ -4,7 +4,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { askClaude } from "@/lib/claude";
-import { getDriveDocuments } from "@/lib/drive";
+import * as driveModule from "@/lib/drive";
 import { ChatResponse, DriveDocument } from "@/types";
 
 export const runtime = "nodejs";
@@ -39,7 +39,6 @@ function scoreDocument(question: string, doc: DriveDocument): number {
     }
   }
 
-  // Dá peso extra se o nome do documento tiver termo da pergunta
   const docName = normalizeText(doc.name);
   for (const token of questionTokens) {
     if (docName.includes(token)) {
@@ -60,16 +59,67 @@ function selectRelevantDocuments(
       doc,
       score: scoreDocument(question, doc),
     }))
-    .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score);
 
-  return scored.slice(0, limit).map((item) => item.doc);
+  const relevant = scored.filter((item) => item.score > 0);
+
+  if (relevant.length > 0) {
+    return relevant.slice(0, limit).map((item) => item.doc);
+  }
+
+  // fallback: se nada bater, manda alguns documentos mesmo assim
+  return documents.slice(0, Math.min(limit, documents.length));
 }
 
 function buildSources(documents: DriveDocument[]) {
   return documents.map((doc) => ({
     name: doc.name,
   }));
+}
+
+function sanitizeHistory(
+  history: unknown
+): { role: "user" | "assistant"; content: string }[] {
+  if (!Array.isArray(history)) return [];
+
+  return history
+    .filter((msg): msg is { role: unknown; content: unknown } => {
+      return typeof msg === "object" && msg !== null;
+    })
+    .map((msg) => ({
+      role: msg.role === "assistant" ? "assistant" : "user",
+      content: typeof msg.content === "string" ? msg.content.trim() : "",
+    }))
+    .filter((msg) => msg.content.length > 0)
+    .slice(-6);
+}
+
+async function loadDriveDocuments(): Promise<DriveDocument[]> {
+  // Aceita vários nomes possíveis para evitar erro de import
+  const possibleFns = [
+    (driveModule as Record<string, unknown>).getDriveDocuments,
+    (driveModule as Record<string, unknown>).fetchDriveDocuments,
+    (driveModule as Record<string, unknown>).getDocumentsFromDrive,
+    (driveModule as Record<string, unknown>).fetchDocumentsFromDrive,
+  ];
+
+  const driveFn = possibleFns.find(
+    (fn): fn is () => Promise<DriveDocument[]> => typeof fn === "function"
+  );
+
+  if (!driveFn) {
+    throw new Error(
+      "Nenhuma função válida de leitura do Google Drive foi encontrada em lib/drive.ts. Esperado: getDriveDocuments ou fetchDriveDocuments."
+    );
+  }
+
+  const docs = await driveFn();
+
+  if (!Array.isArray(docs)) {
+    throw new Error("A função de leitura do Google Drive não retornou uma lista válida.");
+  }
+
+  return docs;
 }
 
 // ── POST /api/chat ────────────────────────────
@@ -86,16 +136,7 @@ export async function POST(req: NextRequest) {
     }
 
     const question = body.question.trim();
-    const history =
-      Array.isArray(body.history) && body.history.length > 0
-        ? body.history.filter(
-            (msg: unknown) =>
-              typeof msg === "object" &&
-              msg !== null &&
-              "role" in msg &&
-              "content" in msg
-          )
-        : [];
+    const history = sanitizeHistory(body.history);
 
     if (!question) {
       return NextResponse.json(
@@ -105,9 +146,9 @@ export async function POST(req: NextRequest) {
     }
 
     // 1. Buscar documentos do Google Drive
-    const allDocuments = await getDriveDocuments();
+    const allDocuments = await loadDriveDocuments();
 
-    if (!allDocuments || allDocuments.length === 0) {
+    if (!allDocuments.length) {
       const emptyResponse: ChatResponse = {
         answer:
           "Não encontrei materiais de suporte disponíveis no momento. Para mais ajuda, entre em contato com o suporte GoSports.",
@@ -118,12 +159,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 2. Selecionar documentos mais relevantes
-    const relevantDocuments = selectRelevantDocuments(question, allDocuments, 5);
-
-    // Se nada relevante for encontrado, ainda manda lista vazia pro Claude,
-    // para ele usar o fallback correto
-    const documentsForClaude =
-      relevantDocuments.length > 0 ? relevantDocuments : [];
+    const documentsForClaude = selectRelevantDocuments(question, allDocuments, 5);
 
     // 3. Perguntar ao Claude
     const answer = await askClaude(question, documentsForClaude, history);
@@ -142,22 +178,28 @@ export async function POST(req: NextRequest) {
       "Ocorreu um erro ao processar sua pergunta. Tente novamente em alguns instantes.";
 
     if (error instanceof Error) {
-      // Erros específicos de Drive
+      const lower = error.message.toLowerCase();
+
       if (
         error.message.includes("GOOGLE_SERVICE_ACCOUNT") ||
-        error.message.toLowerCase().includes("drive error")
+        lower.includes("drive error") ||
+        lower.includes("google drive") ||
+        lower.includes("service account")
       ) {
         message =
           "Houve um problema ao acessar os materiais de suporte do Google Drive.";
-      }
-
-      // Erros específicos de Anthropic
-      if (
-        error.message.toLowerCase().includes("anthropic") ||
-        error.message.toLowerCase().includes("claude")
+      } else if (
+        lower.includes("anthropic") ||
+        lower.includes("claude") ||
+        lower.includes("api key")
       ) {
         message =
           "Houve um problema ao gerar a resposta com a IA do GoSports.";
+      } else if (
+        lower.includes("nenhuma função válida de leitura do google drive")
+      ) {
+        message =
+          "A integração com o Google Drive não está configurada corretamente no projeto.";
       }
     }
 
